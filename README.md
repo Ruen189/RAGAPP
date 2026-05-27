@@ -356,6 +356,7 @@ python scripts/seed_knowledge_base.py
 - `compression`
 - `retrieval`
 - `llm_call`
+- `performance`
 - `queue`
 
 Как искать проблемы:
@@ -363,7 +364,11 @@ python scripts/seed_knowledge_base.py
 - фильтр по `trace_id` через stdout лог контейнера `api`/`worker`;
 - корреляция по `conversation_id` для конфликтов контекста;
 - по `queue.size`/`queue.position` находить перегруз;
-- по `llm_call.latency_ms` смотреть узкие места;
+- по `llm_call.time_to_first_token_ms` смотреть задержку до первого токена;
+- по `llm_call.tokens_per_second_after_first` смотреть скорость генерации после первого токена;
+- по `performance.generation_latency_ms` смотреть общее время LLM streaming-вызова;
+- по `performance.total_from_question_received_ms` смотреть время от поступления вопроса до завершения генерации;
+- по `retrieval.latency_ms` / `performance.retrieval_latency_ms` смотреть время поиска по векторной базе;
 - `retrieval.used=false` при factual вопросе — индикатор tuning policy/KB.
 
 ## 11) Тесты

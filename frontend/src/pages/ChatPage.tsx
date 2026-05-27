@@ -1,9 +1,10 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api, streamJob } from "../api";
 import { MarkdownMessage } from "../MarkdownMessage";
 
 type Conversation = { id: string; title: string };
-type Message = { id: string; role: "user" | "assistant" | "system"; content: string };
+type Attachment = { kind: string; content_type: string; value: string };
+type Message = { id: string; role: "user" | "assistant" | "system"; content: string; attachments?: Attachment[] };
 type RetrievalResult = { document_id: string; chunk_id: string; score: number };
 type Capabilities = { model_hf: string; multimodal: boolean; max_queue_size: number };
 
@@ -20,10 +21,11 @@ export function ChatPage() {
   const [thinkingNotice, setThinkingNotice] = useState<string>("");
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [attachmentName, setAttachmentName] = useState<string>("");
-  const [attachmentPayload, setAttachmentPayload] = useState<{ kind: string; content_type: string; value: string }[]>([]);
+  const [attachmentPayload, setAttachmentPayload] = useState<Attachment[]>([]);
   const [error, setError] = useState<string>("");
   const [isRenaming, setIsRenaming] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === conversationId),
@@ -52,7 +54,10 @@ export function ChatPage() {
   }, []);
 
   useEffect(() => {
-    if (conversationId) void loadMessages(conversationId);
+    if (conversationId) {
+      void loadMessages(conversationId);
+      resetAttachment();
+    }
   }, [conversationId]);
 
   async function createConversation() {
@@ -84,21 +89,25 @@ export function ChatPage() {
 
   async function send(event: FormEvent) {
     event.preventDefault();
-    if (!conversationId || !input.trim()) return;
+    if (!conversationId || (!input.trim() && attachmentPayload.length === 0)) return;
     setError("");
     if (attachmentPayload.length > 0 && !capabilities?.multimodal) {
       setError("Простите, я понимаю только текст");
       return;
     }
     setStatus("queued");
-    const requestText = input;
+    const requestText = input.trim() || "Опиши прикрепленное изображение.";
+    const requestAttachments = attachmentPayload;
     setInput("");
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", content: requestText }]);
+    setMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), role: "user", content: requestText, attachments: requestAttachments },
+    ]);
     let enqueue: { job_id: string };
     try {
       enqueue = await api<{ job_id: string }>(`/api/chat/conversations/${conversationId}/messages`, {
         method: "POST",
-        body: JSON.stringify({ content: requestText, attachments: attachmentPayload }),
+        body: JSON.stringify({ content: requestText, attachments: requestAttachments }),
       });
     } catch (err) {
       setStatus("error");
@@ -107,6 +116,7 @@ export function ChatPage() {
     }
     setAttachmentPayload([]);
     setAttachmentName("");
+    resetAttachment();
     let assistantBuffer = "";
     let sourceHandle: { close: () => void } | null = null;
     try {
@@ -156,12 +166,27 @@ export function ChatPage() {
       if (nextStatus === "done" || nextStatus === "error") {
         sourceHandle?.close();
         setThinkingNotice("");
-        if (conversationId) void loadMessages(conversationId);
+        if (conversationId) {
+          void loadMessages(conversationId);
+          void loadConversations();
+        }
       }
       });
     } catch (err) {
       setStatus("error");
       setError((err as Error).message);
+    }
+  }
+
+  function removeAttachment() {
+    resetAttachment();
+  }
+
+  function resetAttachment() {
+    setAttachmentPayload([]);
+    setAttachmentName("");
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
   }
 
@@ -185,11 +210,13 @@ export function ChatPage() {
     <main className="chat-layout">
       <aside className="sidebar">
         <button onClick={createConversation}>+ Новый диалог</button>
-        {conversations.map((conv) => (
-          <button key={conv.id} onClick={() => setConversationId(conv.id)} className={conv.id === conversationId ? "active" : ""}>
-            {conv.title}
-          </button>
-        ))}
+        <div className="conversation-list">
+          {conversations.map((conv) => (
+            <button key={conv.id} onClick={() => setConversationId(conv.id)} className={conv.id === conversationId ? "active" : ""}>
+              {conv.title}
+            </button>
+          ))}
+        </div>
       </aside>
       <section className="chat-panel">
         <div className="conversation-heading">
@@ -218,6 +245,18 @@ export function ChatPage() {
             <article key={msg.id} className={`msg ${msg.role}`}>
               <strong>{msg.role === "user" ? "Вы" : "Ассистент"}:</strong>
               {msg.role === "assistant" ? <MarkdownMessage content={msg.content} /> : <div>{msg.content}</div>}
+              {msg.attachments && msg.attachments.length > 0 && (
+                <div className="message-attachments">
+                  {msg.attachments.map((attachment, index) =>
+                    attachment.kind === "image" ? (
+                      <figure key={index} className="message-image">
+                        <img src={attachment.value} alt={`Вложение ${index + 1}`} />
+                        <figcaption>Изображение прикреплено к этому сообщению</figcaption>
+                      </figure>
+                    ) : null
+                  )}
+                </div>
+              )}
             </article>
           ))}
         </div>
@@ -235,8 +274,16 @@ export function ChatPage() {
             rows={4}
           />
           <div className="attachment-row">
-            <input type="file" accept="image/*" onChange={(e) => void onAttachFile(e.target.files?.[0] ?? null)} />
-            {attachmentName && <span>Файл: {attachmentName}</span>}
+            <input ref={fileInputRef} type="file" accept="image/*" onChange={(e) => void onAttachFile(e.target.files?.[0] ?? null)} />
+            {attachmentName && (
+              <div className="composer-preview">
+                <img src={attachmentPayload[0]?.value} alt="Превью вложения" />
+                <span>Файл: {attachmentName}</span>
+                <button type="button" onClick={removeAttachment}>
+                  УДАЛИТЬ
+                </button>
+              </div>
+            )}
             {capabilities && !capabilities.multimodal && <span>Мультимодальность отключена</span>}
           </div>
           <button type="submit">Отправить</button>
