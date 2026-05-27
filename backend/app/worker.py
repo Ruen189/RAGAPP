@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.models import Conversation, GenerationJob, JobStatus, Message, MessageRole
 from app.services.context_service import ContextService
-from app.services.llama_client import LlamaClient
+from app.services.llama_client import LlamaClient, LlamaServerUnavailable
 from app.services.pipeline_logger import write_pipeline_log
 from app.services.prompt_templates import RETRIEVAL_AWARE_PROMPT, build_system_prompt
 from app.services.queue_service import QueueService
@@ -20,6 +21,26 @@ from app.services.token_estimator import TokenEstimator
 
 
 logger = logging.getLogger("worker")
+
+
+ROLE_PREFIX_RE = re.compile(r"^\s*(assistant|ассистент)\s*:\s*", re.IGNORECASE)
+NEXT_TURN_RE = re.compile(r"\n\s*(user|пользователь|USER)\s*:\s*", re.IGNORECASE)
+
+
+def render_history(messages: list[Message]) -> str:
+    rendered = []
+    for idx, message in enumerate(messages, start=1):
+        role = "Пользователь" if message.role == MessageRole.user else "Ассистент"
+        rendered.append(f"<message {idx} role=\"{role}\">\n{message.content}\n</message>")
+    return "\n\n".join(rendered)
+
+
+def clean_assistant_answer(answer: str) -> str:
+    cleaned = ROLE_PREFIX_RE.sub("", answer.strip())
+    next_turn_match = NEXT_TURN_RE.search(cleaned)
+    if next_turn_match:
+        cleaned = cleaned[: next_turn_match.start()].rstrip()
+    return cleaned
 
 
 async def claim_next_job():
@@ -88,14 +109,16 @@ async def process_job(redis_client: Redis, job_id: uuid.UUID) -> None:
             rag_part = "\n\n".join(
                 f"[doc={chunk.document_id} chunk={chunk.chunk_id} score={chunk.score:.3f}] {chunk.text}" for chunk in retrieved
             )
-            messages_part = "\n".join(f"{m.role.value}: {m.content}" for m in context_window.selected_messages)
+            history_messages = [message for message in context_window.selected_messages if message.id != request_message.id]
+            messages_part = render_history(history_messages)
             prompt = (
                 f"{context_window.system_prompt}\n\n"
                 f"{rag_instruction}\n\n"
                 f"SUMMARY:\n{context_window.summary_text or '-'}\n\n"
                 f"RAG_CONTEXT:\n{rag_part or '-'}\n\n"
-                f"HISTORY:\n{messages_part}\n\n"
-                f"USER:\n{request_message.content}\n"
+                f"HISTORY:\n{messages_part or '-'}\n\n"
+                f"Текущий вопрос пользователя:\n{request_message.content}\n\n"
+                "Ответь только финальным сообщением ассистента. Не добавляй имена ролей и не продолжай диалог за пользователя.\n"
             )
             position, size = await queue.get_scope_queue_metrics(db, job.user_id, job.conversation_id, job)
             await queue.publish_status(
@@ -108,12 +131,27 @@ async def process_job(redis_client: Redis, job_id: uuid.UUID) -> None:
 
             chunks: list[str] = []
             started = time.perf_counter()
-            async for token in llama.generate_stream(prompt):
+
+            async def publish_model_loading(attempt: int, max_attempts: int, _: str) -> None:
+                await queue.publish_status(
+                    str(job.id),
+                    JobStatus.thinking,
+                    position,
+                    size,
+                    payload={
+                        "thinking_notice": (
+                            f"Модель загружается или еще не готова, подождите... "
+                            f"попытка {attempt}/{max_attempts}"
+                        )
+                    },
+                )
+
+            async for token in llama.generate_stream(prompt, on_retry=publish_model_loading):
                 if token:
                     chunks.append(token)
                     await queue.publish_status(str(job.id), JobStatus.responding, position, size, payload={"delta": token})
 
-            answer = "".join(chunks).strip()
+            answer = clean_assistant_answer("".join(chunks))
             latency_ms = int((time.perf_counter() - started) * 1000)
             answer_message = Message(
                 conversation_id=job.conversation_id,
@@ -191,6 +229,12 @@ async def process_job(redis_client: Redis, job_id: uuid.UUID) -> None:
                     "mode": "rag" if retrieved else "general",
                 },
             )
+        except LlamaServerUnavailable as exc:
+            logger.warning("llama_server_unavailable: %s", exc)
+            job.status = JobStatus.error
+            job.error_message = str(exc)
+            await db.commit()
+            await queue.publish_status(str(job.id), JobStatus.error, 0, 0, payload={"error": str(exc)})
         except Exception as exc:  # noqa: BLE001
             logger.exception("job_failed")
             job.status = JobStatus.error

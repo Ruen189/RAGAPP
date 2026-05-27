@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api, streamJob } from "../api";
+import { MarkdownMessage } from "../MarkdownMessage";
 
 type Conversation = { id: string; title: string };
 type Message = { id: string; role: "user" | "assistant" | "system"; content: string };
@@ -108,7 +109,8 @@ export function ChatPage() {
     setAttachmentName("");
     let assistantBuffer = "";
     let sourceHandle: { close: () => void } | null = null;
-    sourceHandle = await streamJob(enqueue.job_id, (eventPayload) => {
+    try {
+      sourceHandle = await streamJob(enqueue.job_id, (eventPayload) => {
       const nextStatus = eventPayload.status as (typeof STATUSES)[number];
       if (nextStatus) setStatus(nextStatus);
       const notice = eventPayload?.payload?.thinking_notice as string | undefined;
@@ -147,12 +149,20 @@ export function ChatPage() {
       if (eventPayload?.payload?.mode) {
         setModelMode(eventPayload.payload.mode as "rag" | "general");
       }
+      const streamError = eventPayload?.payload?.error as string | undefined;
+      if (streamError) {
+        setError(streamError);
+      }
       if (nextStatus === "done" || nextStatus === "error") {
         sourceHandle?.close();
         setThinkingNotice("");
         if (conversationId) void loadMessages(conversationId);
       }
-    });
+      });
+    } catch (err) {
+      setStatus("error");
+      setError((err as Error).message);
+    }
   }
 
   async function onAttachFile(file: File | null) {
@@ -198,18 +208,32 @@ export function ChatPage() {
             </>
           )}
         </div>
-        <div className="status">Статус: {status}</div>
+        <div className="status">
+          Статус: {status === "queued" ? "queued — запрос в очереди или ожидает свободный worker" : status}
+        </div>
         {thinkingNotice && <div className="status-note">{thinkingNotice}</div>}
         {error && <div className="error">{error}</div>}
         <div className="messages">
           {messages.map((msg) => (
             <article key={msg.id} className={`msg ${msg.role}`}>
-              <strong>{msg.role}:</strong> {msg.content}
+              <strong>{msg.role === "user" ? "Вы" : "Ассистент"}:</strong>
+              {msg.role === "assistant" ? <MarkdownMessage content={msg.content} /> : <div>{msg.content}</div>}
             </article>
           ))}
         </div>
         <form onSubmit={send} className="composer">
-          <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="Введите вопрос..." rows={4} />
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="Введите вопрос..."
+            rows={4}
+          />
           <div className="attachment-row">
             <input type="file" accept="image/*" onChange={(e) => void onAttachFile(e.target.files?.[0] ?? null)} />
             {attachmentName && <span>Файл: {attachmentName}</span>}

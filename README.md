@@ -250,7 +250,7 @@ Redis:
 ```bash
 llama-server \
   -hf unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL \
-  -c 128000 \
+  -c 32768 \
   --host 0.0.0.0 \
   --port 8765
 ```
@@ -260,16 +260,43 @@ llama-server \
 - внешний локальный llama.cpp (`LLAMA_HOST` указывает на host);
 - контейнер `llama` в `docker-compose` (profile `llama`), если локально не установлен.
 - образ llama.cpp задается через `LLAMA_IMAGE`; по умолчанию используется CPU-образ `ghcr.io/ggml-org/llama.cpp:server`.
+- `LLAMA_PLATFORM=linux/amd64` фиксирует архитектуру контейнера и помогает избежать случайного запуска через эмуляцию.
+- `LLAMA_N_GPU_LAYERS`, `LLAMA_THREADS`, `LLAMA_PARALLEL` управляют скоростью/параллельностью llama-server.
+- `LLAMA_EXTRA_ARGS` позволяет передать дополнительные параметры, например `--cache-type-k q8_0 --cache-type-v q8_0`.
+- Flash Attention намеренно не включается: на разных сборках llama.cpp этот параметр ведет себя нестабильно и требует явного значения `on|off|auto`.
 
-Для NVIDIA GPU можно выставить:
+Для NVIDIA GPU используйте отдельный compose profile:
 
-```env
-LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
+```bash
+docker compose --profile llama-cuda up --build
 ```
 
-На хосте при этом должен быть установлен NVIDIA Container Toolkit.
+При этом `llama-cuda` получает сетевой alias `llama`, поэтому `LLAMA_HOST=llama` не меняется. На хосте должен быть установлен NVIDIA Container Toolkit / включена GPU-поддержка Docker Desktop.
 
-Пример с контейнерной моделью:
+Модель и cache скачивания сохраняются в примонтированной папке `/models`.
+Путь на хосте задается переменной:
+
+```env
+LLAMA_MODELS_DIR=${LOCALAPPDATA}/llama.cpp
+```
+
+На Windows это обычно:
+
+```text
+C:\Users\<user>\AppData\Local\llama.cpp
+```
+
+Для контейнеров выставлены `HOME`, `HF_HOME`, `HUGGINGFACE_HUB_CACHE`, `XDG_CACHE_HOME` и `LLAMA_CACHE` внутрь `/models`, а `/root/.cache` дополнительно смонтирован в ту же папку. Поэтому пересборка `api/worker/frontend` не должна заново скачивать модель. Повторное скачивание возможно только если удалить эту папку, выполнить `docker compose down -v` для томов, сменить `MODEL_HF` или если сам `llama.cpp` не нашел совместимый cache.
+
+CPU fallback:
+
+```bash
+docker compose --profile llama up --build
+```
+
+Для локального запуска по умолчанию используется `MODEL_CONTEXT_SIZE=32768`. Окно `128000` для 9B-модели на 16 GB VRAM часто не помещается из-за KV-cache и может не загрузиться вообще.
+
+Пример с CPU-контейнерной моделью:
 
 ```bash
 docker compose --profile llama up --build

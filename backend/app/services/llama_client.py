@@ -1,9 +1,14 @@
 import json
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import httpx
 
 from app.config import get_settings
+
+
+class LlamaServerUnavailable(Exception):
+    pass
 
 
 class LlamaClient:
@@ -20,12 +25,16 @@ class LlamaClient:
         if model:
             payload["model"] = model
         async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(f"{self.settings.llama_url}/completion", json=payload)
-            response.raise_for_status()
+            response = await self._post_with_retries(client, payload)
             data = response.json()
         return data.get("content", "").strip()
 
-    async def generate_stream(self, prompt: str, model: str | None = None) -> AsyncIterator[str]:
+    async def generate_stream(
+        self,
+        prompt: str,
+        model: str | None = None,
+        on_retry: Callable[[int, int, str], Awaitable[None]] | None = None,
+    ) -> AsyncIterator[str]:
         payload = {
             "prompt": prompt,
             "temperature": 0.2,
@@ -35,7 +44,7 @@ class LlamaClient:
         if model:
             payload["model"] = model
         async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("POST", f"{self.settings.llama_url}/completion", json=payload) as response:
+            async with self._stream_with_retries(client, payload, on_retry=on_retry) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
                     if not line:
@@ -43,6 +52,70 @@ class LlamaClient:
                     token = parse_llama_stream_line(line)
                     if token:
                         yield token
+
+    async def _post_with_retries(self, client: httpx.AsyncClient, payload: dict) -> httpx.Response:
+        last_error: Exception | None = None
+        for attempt in range(1, 61):
+            try:
+                response = await client.post(f"{self.settings.llama_url}/completion", json=payload)
+                response.raise_for_status()
+                return response
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError) as exc:
+                last_error = exc
+                await asyncio.sleep(min(attempt, 5))
+        raise LlamaServerUnavailable(
+            f"LLM-сервер недоступен по адресу {self.settings.llama_url}. "
+            "Проверьте, что контейнер llama запущен, модель полностью загрузилась и LLAMA_HOST/LLAMA_PORT совпадают с .env."
+        ) from last_error
+
+    def _stream_with_retries(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict,
+        on_retry: Callable[[int, int, str], Awaitable[None]] | None = None,
+    ):
+        return _RetryingStream(client, f"{self.settings.llama_url}/completion", payload, self.settings.llama_url, on_retry)
+
+
+class _RetryingStream:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        payload: dict,
+        llama_url: str,
+        on_retry: Callable[[int, int, str], Awaitable[None]] | None = None,
+    ) -> None:
+        self.client = client
+        self.url = url
+        self.payload = payload
+        self.llama_url = llama_url
+        self.on_retry = on_retry
+        self.stream_context = None
+        self.response = None
+
+    async def __aenter__(self) -> httpx.Response:
+        last_error: Exception | None = None
+        max_attempts = 60
+        for attempt in range(1, max_attempts + 1):
+            try:
+                self.stream_context = self.client.stream("POST", self.url, json=self.payload)
+                self.response = await self.stream_context.__aenter__()
+                return self.response
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError) as exc:
+                last_error = exc
+                self.stream_context = None
+                if self.on_retry is not None:
+                    await self.on_retry(attempt, max_attempts, str(exc))
+                await asyncio.sleep(min(attempt, 5))
+        raise LlamaServerUnavailable(
+            f"LLM-сервер недоступен по адресу {self.llama_url}. "
+            "Проверьте, что контейнер llama запущен, модель полностью загрузилась и LLAMA_HOST/LLAMA_PORT совпадают с .env."
+        ) from last_error
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        if self.stream_context is not None:
+            await self.stream_context.__aexit__(exc_type, exc, traceback)
 
 
 def parse_llama_stream_line(line: str) -> str:

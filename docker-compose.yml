@@ -68,17 +68,61 @@ services:
 
   llama:
     image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    platform: ${LLAMA_PLATFORM:-linux/amd64}
     profiles:
       - llama
+    environment:
+      HOME: /models
+      HF_HOME: /models/huggingface
+      HUGGINGFACE_HUB_CACHE: /models/huggingface/hub
+      XDG_CACHE_HOME: /models/.cache
+      LLAMA_CACHE: /models/llama-cache
     command: >
       -hf ${MODEL_HF}
       -c ${MODEL_CONTEXT_SIZE}
+      --n-gpu-layers 0
+      --threads ${LLAMA_THREADS:-8}
+      --parallel ${LLAMA_PARALLEL:-1}
+      ${LLAMA_EXTRA_ARGS:-}
       --host 0.0.0.0
       --port ${LLAMA_PORT}
     ports:
       - "${LLAMA_PORT}:${LLAMA_PORT}"
     volumes:
-      - ${LOCALAPPDATA:-./models}/llama.cpp:/models
+      - ${LLAMA_MODELS_DIR:-./models/llama.cpp}:/models
+      - ${LLAMA_MODELS_DIR:-./models/llama.cpp}/.cache:/root/.cache
+    restart: unless-stopped
+
+  llama-cuda:
+    image: ${LLAMA_CUDA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    platform: ${LLAMA_PLATFORM:-linux/amd64}
+    profiles:
+      - llama-cuda
+    gpus: all
+    environment:
+      HOME: /models
+      HF_HOME: /models/huggingface
+      HUGGINGFACE_HUB_CACHE: /models/huggingface/hub
+      XDG_CACHE_HOME: /models/.cache
+      LLAMA_CACHE: /models/llama-cache
+    command: >
+      -hf ${MODEL_HF}
+      -c ${MODEL_CONTEXT_SIZE}
+      --n-gpu-layers ${LLAMA_N_GPU_LAYERS:-999}
+      --threads ${LLAMA_THREADS:-8}
+      --parallel ${LLAMA_PARALLEL:-1}
+      ${LLAMA_EXTRA_ARGS:-}
+      --host 0.0.0.0
+      --port ${LLAMA_PORT}
+    ports:
+      - "${LLAMA_PORT}:${LLAMA_PORT}"
+    volumes:
+      - ${LLAMA_MODELS_DIR:-./models/llama.cpp}:/models
+      - ${LLAMA_MODELS_DIR:-./models/llama.cpp}/.cache:/root/.cache
+    networks:
+      default:
+        aliases:
+          - llama
     restart: unless-stopped
 
 volumes:

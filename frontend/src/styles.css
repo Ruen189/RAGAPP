@@ -154,6 +154,7 @@ body {
   line-height: 1.55;
   margin: 10px 0;
   padding: 12px 14px;
+  white-space: pre-wrap;
 }
 
 .msg.user {
@@ -166,6 +167,30 @@ body {
   background: #ecfdf5;
   color: #065f46;
   margin-right: 8%;
+}
+
+.markdown-message {
+  margin-top: 6px;
+  white-space: normal;
+}
+
+.markdown-message p {
+  margin: 0 0 10px;
+  white-space: pre-line;
+}
+
+.markdown-message p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-message ul,
+.markdown-message ol {
+  margin: 8px 0 10px 22px;
+  padding: 0;
+}
+
+.markdown-message li {
+  margin: 4px 0;
 }
 
 .composer textarea {
