@@ -39,7 +39,7 @@ export function LoginPage() {
         <button type="submit">{mode === "login" ? "Войти" : "Создать пользователя и войти"}</button>
       </form>
       <button className="link-button" onClick={() => setMode(mode === "login" ? "register" : "login")}>
-        {mode === "login" ? "Нужен обычный пользователь? Зарегистрироваться" : "Уже есть аккаунт? Войти"}
+        {mode === "login" ? "Нет аккаунта? Зарегистрироваться" : "Уже есть аккаунт? Войти"}
       </button>
       {error && <pre className="error">{error}</pre>}
     </main>
