@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     summary_tokens_size: int = 12000
     summary_model_hf: str | None = None
     summary_model_context_size: int | None = None
+    use_dedicated_summary_model: bool = False
+    summary_llama_host: str = "llama-summary"
+    summary_llama_port: int = 8767
     database_url: str
     redis_url: str
     qdrant_url: str
@@ -54,12 +57,22 @@ class Settings(BaseSettings):
         return f"http://{self.llama_host}:{self.llama_port}"
 
     @property
+    def summary_llama_url(self) -> str:
+        return f"http://{self.summary_llama_host}:{self.summary_llama_port}"
+
+    @property
     def effective_summary_model(self) -> str:
         return self.summary_model_hf or self.model_hf
 
     @property
     def effective_summary_context(self) -> int:
         return self.summary_model_context_size or self.model_context_size
+
+    @property
+    def summary_llama_endpoint(self) -> str:
+        if self.use_dedicated_summary_model:
+            return self.summary_llama_url
+        return self.llama_url
 
 
 @lru_cache

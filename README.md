@@ -64,6 +64,7 @@ Redis:
   - первый админ создается автоматически из `ADMIN_LOGIN` / `ADMIN_PASS`.
 - `/chat`
   - список диалогов, сообщения, composer, file input для изображений (только если `MODEL_MULTIMODAL=True` и модель отмечена multimodal), streaming ответа.
+  - автоназвание диалога: новый чат создаётся как `Новый диалог`; после **первого успешного ответа** worker переименовывает его по первому сообщению пользователя (без вызова LLM — эвристика: убрать «расскажи про…», взять до 6 слов, максимум 60 символов; только картинка без текста → `Изображение`).
   - статусы: `queued / thinking / retrieving / responding / done / error`.
   - thinking UX: показывается `"Рассуждаю, подождите..."`, chain-of-thought пользователю не показывается.
   - панель источников + явный режим: `На основе базы знаний` / `Общий ответ модели`.
@@ -136,6 +137,47 @@ Redis:
 
 - после рестарта состояние summary и флаги `summarized` остаются в БД;
 - контекст восстанавливается детерминированно.
+
+### 4.4 Отдельная модель для summary (опционально)
+
+По умолчанию summary генерируется тем же `llama-server`, что и основной чат (`LLAMA_HOST` / `LLAMA_PORT`), с моделью `SUMMARY_MODEL_HF` или `MODEL_HF`.
+
+Если включить `USE_DEDICATED_SUMMARY_MODEL=True`, worker отправляет запросы на сжатие контекста на отдельный `llama-server` (`SUMMARY_LLAMA_HOST` / `SUMMARY_LLAMA_PORT`). Рекомендуемая модель — более лёгкая `unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL`, чтобы не отнимать VRAM у основной 9B-модели.
+
+В `docker-compose` summary вынесен в **отдельные profiles** (чтобы CPU- и CUDA-контейнеры не боролись за один порт):
+
+| Стек | Короткий profile | По отдельности |
+|---|---|---|
+| GPU + summary | `llama-gpu-full` | `llama-cuda` + `llama-summary-cuda` |
+| CPU + summary | `llama-cpu-full` | `llama` + `llama-summary` |
+| Только основная GPU | `llama-cuda` | — |
+
+```bash
+# GPU: основная 9B + отдельная 4B для summary (одна команда)
+USE_DEDICATED_SUMMARY_MODEL=True
+docker compose --profile llama-gpu-full up --build
+```
+
+Чтобы не писать `--profile` каждый раз, добавьте в `.env`:
+
+```env
+COMPOSE_PROFILES=llama-gpu-full
+```
+
+После этого достаточно:
+
+```bash
+docker compose up --build
+```
+
+```bash
+# CPU + summary
+docker compose --profile llama-cpu-full up --build
+```
+
+Не смешивайте `llama-summary` (CPU) и `llama-summary-cuda` (GPU) — оба слушают `SUMMARY_LLAMA_PORT` (по умолчанию `8767`).
+
+Без profile summary отдельный контейнер не стартует — оставьте `USE_DEDICATED_SUMMARY_MODEL=False`.
 
 ## 5) RAG-дизайн
 
@@ -228,6 +270,9 @@ Redis:
 - `SUMMARY_TOKENS_SIZE`
 - `SUMMARY_MODEL_HF`
 - `SUMMARY_MODEL_CONTEXT_SIZE`
+- `USE_DEDICATED_SUMMARY_MODEL`
+- `SUMMARY_LLAMA_HOST`
+- `SUMMARY_LLAMA_PORT`
 - `DATABASE_URL`
 - `REDIS_URL`
 - `QDRANT_URL`
@@ -310,6 +355,47 @@ docker compose up --build
 
 Тогда API ожидает уже доступный внешний `llama-server`.
 
+### 8.1 Замена моделей
+
+Модели задаются через `.env` и подхватываются `llama-server` при старте контейнера. Пересборка `api` / `worker` / `frontend` для смены модели не нужна — достаточно изменить env и перезапустить соответствующие контейнеры llama.
+
+| Переменная | Назначение |
+|---|---|
+| `MODEL_HF` | Основная модель чата (контейнеры `llama` / `llama-cuda`) |
+| `MODEL_CONTEXT_SIZE` | Размер контекста основной модели (`-c`) |
+| `SUMMARY_MODEL_HF` | Модель для summary (контейнеры `llama-summary` / `llama-summary-cuda` или та же, что и чат, если флаг выключен) |
+| `SUMMARY_MODEL_CONTEXT_SIZE` | Размер контекста summary-модели |
+| `USE_DEDICATED_SUMMARY_MODEL` | `True` — summary идёт на отдельный llama-server; `False` — на основной |
+
+Пример: основной чат на 9B, summary на 4B:
+
+```env
+MODEL_HF=unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL
+MODEL_CONTEXT_SIZE=32768
+USE_DEDICATED_SUMMARY_MODEL=True
+SUMMARY_MODEL_HF=unsloth/Qwen3.5-4B-GGUF:UD-Q4_K_XL
+SUMMARY_MODEL_CONTEXT_SIZE=16384
+SUMMARY_LLAMA_HOST=llama-summary
+SUMMARY_LLAMA_PORT=8767
+```
+
+После правки `.env`:
+
+```bash
+docker compose --profile llama-gpu-full up -d
+docker compose restart llama-cuda llama-summary-cuda
+```
+
+Первый запуск с новым `MODEL_HF` / `SUMMARY_MODEL_HF` скачает GGUF в `LLAMA_MODELS_DIR` (общий cache для обоих контейнеров). Смена квантования или репозитория Hugging Face считается новой моделью.
+
+Замена через docker compose напрямую: в `docker-compose.yml` команда контейнера уже использует `${MODEL_HF}` и `${SUMMARY_MODEL_HF}` из `.env`. Можно также переопределить переменные в shell без правки файла:
+
+```bash
+MODEL_HF=unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_M docker compose --profile llama-cuda up -d llama-cuda
+```
+
+Для внешнего (не compose) `llama-server` укажите `-hf ...` при ручном запуске и выставьте `LLAMA_HOST` / `LLAMA_PORT` (и при dedicated summary — `SUMMARY_LLAMA_HOST` / `SUMMARY_LLAMA_PORT`) в `.env`.
+
 ## 9) Запуск
 
 1. Скопировать env:
@@ -320,18 +406,34 @@ cp .env.example .env
 
 2. Проверить значения `DATABASE_URL`, `REDIS_URL`, `QDRANT_URL`, `LLAMA_HOST/PORT`.
 
-3. Запустить:
+3. (Опционально) Проверить, что порты свободны:
+
+```powershell
+.\scripts\check_ports.ps1
+```
+
+Или вручную на Windows:
+
+```powershell
+netstat -ano | findstr ":8766"
+netstat -ano | findstr ":8767"
+docker compose ps
+```
+
+Если порт занят старым контейнером: `docker compose stop llama-summary llama-summary-cuda` или смените `SUMMARY_LLAMA_PORT` в `.env`.
+
+4. Запустить:
 
 ```bash
 docker compose up --build
 ```
 
-4. Открыть:
+5. Открыть:
 
 - frontend: `http://localhost:5173`
 - api docs: `http://localhost:8000/docs`
 
-5. При необходимости загрузить стартовую базу знаний:
+6. При необходимости загрузить стартовую базу знаний:
 
 ```bash
 python scripts/seed_knowledge_base.py

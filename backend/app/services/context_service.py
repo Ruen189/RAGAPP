@@ -23,7 +23,10 @@ class ContextWindow:
 class ContextService:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.llama = LlamaClient()
+        if self.settings.use_dedicated_summary_model:
+            self.llama = LlamaClient(base_url=self.settings.summary_llama_url)
+        else:
+            self.llama = LlamaClient()
 
     async def maybe_compress(self, db: AsyncSession, conversation: Conversation) -> dict | None:
         if not self.settings.summary_enabled:
@@ -45,7 +48,9 @@ class ContextService:
 
         serialized = "\n".join(f"{m.role.value}: {m.content}" for m in to_summarize)
         prompt = f"{SUMMARIZATION_PROMPT.strip()}\n\nТекущий summary:\n{conversation.summary_text or '-'}\n\nНовые сообщения:\n{serialized}"
-        new_summary = await self.llama.generate(prompt, model=self.settings.effective_summary_model)
+        # Отдельный llama-server грузит SUMMARY_MODEL_HF через -hf; основной — MODEL_HF.
+        summary_model = None if self.settings.use_dedicated_summary_model else self.settings.model_hf
+        new_summary = await self.llama.generate(prompt, model=summary_model)
 
         input_chars = len(serialized)
         merged_summary = merge_summaries(conversation.summary_text, new_summary)
@@ -55,7 +60,7 @@ class ContextService:
                 f"{SUMMARIZATION_PROMPT.strip()}\n\n"
                 f"Сильно сократи этот summary до ключевых фактов без потери контекста:\n{merged_summary}"
             )
-            merged_summary = await self.llama.generate(compress_prompt, model=self.settings.effective_summary_model)
+            merged_summary = await self.llama.generate(compress_prompt, model=summary_model)
             merged_tokens = TokenEstimator.count(merged_summary)
 
         conversation.summary_text = merged_summary
@@ -68,6 +73,9 @@ class ContextService:
             "input_chars": input_chars,
             "output_chars": len(merged_summary),
             "summary_text": merged_summary,
+            "summary_model": self.settings.effective_summary_model,
+            "summary_endpoint": self.settings.summary_llama_endpoint,
+            "dedicated_summary_model": self.settings.use_dedicated_summary_model,
         }
 
     async def build_context_window(

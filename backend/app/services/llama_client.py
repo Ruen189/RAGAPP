@@ -12,8 +12,9 @@ class LlamaServerUnavailable(Exception):
 
 
 class LlamaClient:
-    def __init__(self) -> None:
+    def __init__(self, base_url: str | None = None) -> None:
         self.settings = get_settings()
+        self.base_url = base_url or self.settings.llama_url
 
     async def generate(self, prompt: str, model: str | None = None, image_data: list[dict] | None = None) -> str:
         payload = self._build_payload(prompt, stream=False, model=model, image_data=image_data)
@@ -51,8 +52,8 @@ class LlamaClient:
 
     def _endpoint_for(self, image_data: list[dict] | None = None) -> str:
         if image_data:
-            return f"{self.settings.llama_url}/v1/chat/completions"
-        return f"{self.settings.llama_url}/completion"
+            return f"{self.base_url}/v1/chat/completions"
+        return f"{self.base_url}/completion"
 
     def _build_payload(self, prompt: str, stream: bool, model: str | None, image_data: list[dict] | None = None) -> dict:
         if image_data:
@@ -93,7 +94,7 @@ class LlamaClient:
                 last_error = exc
                 await asyncio.sleep(min(attempt, 5))
         raise LlamaServerUnavailable(
-            f"LLM-сервер недоступен по адресу {self.settings.llama_url}. "
+            f"LLM-сервер недоступен по адресу {self.base_url}. "
             "Проверьте, что контейнер llama запущен, модель полностью загрузилась и LLAMA_HOST/LLAMA_PORT совпадают с .env."
         ) from last_error
 
@@ -104,7 +105,7 @@ class LlamaClient:
         payload: dict,
         on_retry: Callable[[int, int, str], Awaitable[None]] | None = None,
     ):
-        return _RetryingStream(client, url, payload, self.settings.llama_url, on_retry)
+        return _RetryingStream(client, url, payload, self.base_url, on_retry)
 
 
 class _RetryingStream:
