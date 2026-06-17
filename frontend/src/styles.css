@@ -55,8 +55,8 @@ body {
 .composer button,
 .sidebar button,
 .rename-form button,
-.form button,
-.card button,
+.form button:not(.password-toggle),
+.card button:not(.visibility-toggle),
 .composer-preview button,
 .profile-card button {
   border: 0;
@@ -78,8 +78,8 @@ body {
 .composer button:hover,
 .sidebar button:hover,
 .rename-form button:hover,
-.form button:hover,
-.card button:hover,
+.form button:not(.password-toggle):hover,
+.card button:not(.visibility-toggle):hover,
 .composer-preview button:hover,
 .profile-card button:hover:not(:disabled) {
   background: #ddd6fe;
@@ -120,7 +120,7 @@ body {
 
 .chat-layout {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 280px;
+  grid-template-columns: 260px minmax(0, 1fr);
   gap: 18px;
   height: calc(100vh - 86px);
   min-height: 620px;
@@ -129,7 +129,6 @@ body {
 }
 
 .sidebar,
-.sources,
 .chat-panel {
   background: rgba(255, 255, 255, 0.88);
   border: 1px solid rgba(148, 163, 184, 0.2);
@@ -140,10 +139,11 @@ body {
   padding: 18px;
 }
 
-.sidebar,
-.sources {
+.sidebar {
+  display: flex;
+  flex-direction: column;
   max-height: 100%;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .sidebar button {
@@ -154,9 +154,20 @@ body {
 }
 
 .conversation-list {
-  max-height: 300px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.sidebar-footer {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 12px;
+}
+
+.feedback-button {
+  margin-bottom: 0;
 }
 
 .conversation-list button:last-child {
@@ -308,6 +319,54 @@ body {
   box-sizing: border-box;
   font: inherit;
   padding: 12px 14px;
+  width: 100%;
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 48px;
+}
+
+.password-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: #64748b;
+  cursor: pointer;
+  display: inline-flex;
+  height: 36px;
+  justify-content: center;
+  line-height: 0;
+  padding: 0;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+}
+
+.password-toggle svg {
+  display: block;
+  height: 20px;
+  width: 20px;
+}
+
+.password-toggle:hover {
+  background: transparent;
+  box-shadow: none;
+  color: #1e293b;
+  transform: translateY(-50%);
+}
+
+.form-hint {
+  color: #64748b;
+  font-size: 13px;
+  margin: -4px 0 0;
 }
 
 .link-button {
@@ -344,6 +403,38 @@ body {
 
 .conversation-heading h2 {
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-heading-actions {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.conversation-heading .heading-delete-button {
+  align-items: center;
+  background: #fee2e2;
+  color: #991b1b;
+  display: inline-flex;
+  height: 40px;
+  justify-content: center;
+  padding: 0;
+  width: 40px;
+}
+
+.conversation-heading .heading-delete-button:hover {
+  background: #fecaca;
+  box-shadow: 0 10px 24px rgba(220, 38, 38, 0.14);
+}
+
+.conversation-heading .heading-delete-button svg {
+  height: 18px;
+  width: 18px;
 }
 
 .rename-form {
@@ -464,6 +555,45 @@ body {
   padding: 14px;
 }
 
+.logs-panel {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 12px;
+}
+
+.logs-panel .log-card:last-of-type {
+  margin-bottom: 12px;
+}
+
+.logs-status {
+  color: #64748b;
+  margin: 0;
+  padding: 0 0 12px;
+}
+
+.logs-pagination {
+  align-items: center;
+  border-top: 1px solid rgba(148, 163, 184, 0.24);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 12px;
+}
+
+.logs-pagination span {
+  color: #64748b;
+  font-size: 13px;
+  text-align: center;
+}
+
+.logs-pagination button {
+  margin: 0;
+  min-width: 96px;
+}
+
 .log-card > div {
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -472,11 +602,276 @@ body {
 .log-card pre {
   box-sizing: border-box;
   font-size: 12px;
-  max-height: 280px;
+  margin: 0;
+  max-height: 840px;
+  min-height: 320px;
   max-width: 100%;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.modal-backdrop {
+  align-items: center;
+  background: rgba(15, 23, 42, 0);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  transition: background-color 0.2s ease;
+  z-index: 1000;
+}
+
+.modal-backdrop.open {
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.modal-card {
+  background: #fff;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 24px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+  box-sizing: border-box;
+  max-width: 520px;
+  opacity: 0;
+  padding: 24px;
+  transform: translateY(12px);
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+  width: 100%;
+}
+
+.modal-card.open {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.modal-card h3 {
+  margin: 0 0 8px;
+}
+
+.modal-subtitle {
+  color: #64748b;
+  margin: 0 0 16px;
+}
+
+.feedback-form textarea {
+  border: 1px solid #cbd5e1;
+  border-radius: 16px;
+  box-sizing: border-box;
+  font: inherit;
+  min-height: 140px;
+  padding: 12px 14px;
+  resize: vertical;
+  width: 100%;
+}
+
+.feedback-meta {
+  color: #64748b;
+  font-size: 13px;
+  margin-top: 6px;
+  text-align: right;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.modal-actions button,
+.modal-secondary {
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  padding: 10px 16px;
+}
+
+.modal-actions button[type="submit"] {
+  background: #4f46e5;
+  color: #fff;
+}
+
+.modal-secondary {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.modal-danger {
+  background: #dc2626;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  padding: 10px 16px;
+}
+
+.modal-danger:disabled,
+.modal-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.modal-success {
+  color: #047857;
+  font-weight: 600;
+  margin: 12px 0 0;
+}
+
+.inline-error {
+  margin: 10px 0 0;
+}
+
+.profile-card-note {
+  color: #64748b;
+  margin: 0 0 12px;
+}
+
+.profile-link-button {
+  background: #eef2ff;
+  border-radius: 999px;
+  color: #3730a3;
+  display: inline-block;
+  font-weight: 600;
+  padding: 10px 16px;
+  text-decoration: none;
+}
+
+.profile-link-button:hover {
+  background: #ddd6fe;
+}
+
+.page-toolbar {
+  margin-bottom: 12px;
+}
+
+.feedback-card {
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 18px;
+  margin-bottom: 12px;
+  padding: 14px;
+}
+
+.feedback-card-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.feedback-card-header time {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.feedback-card p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.empty-state {
+  color: #64748b;
+}
+
+.knowledge-intro {
+  color: #64748b;
+  margin-top: -6px;
+}
+
+.knowledge-page {
+  overflow: visible;
+}
+
+.knowledge-upload-card h3,
+.knowledge-files h3 {
+  margin-top: 0;
+}
+
+.knowledge-file-row {
+  display: grid;
+  gap: 12px;
+}
+
+.knowledge-file-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.knowledge-file-main strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.knowledge-file-main span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.knowledge-file-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.knowledge-action-button {
+  background: #eef2ff;
+  border: 0;
+  border-radius: 999px;
+  color: #3730a3;
+  cursor: pointer;
+  font: inherit;
+  padding: 10px 16px;
+}
+
+.knowledge-action-button:hover:not(:disabled) {
+  background: #ddd6fe;
+}
+
+.danger-button {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #fecaca;
+}
+
+.visibility-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: #64748b;
+  cursor: pointer;
+  display: inline-flex;
+  height: 36px;
+  justify-content: center;
+  padding: 0;
+  transform: none;
+  width: 36px;
+}
+
+.visibility-toggle:hover {
+  background: transparent;
+  box-shadow: none;
+  color: #1e293b;
+  transform: none;
+}
+
+.visibility-toggle svg {
+  display: block;
+  height: 20px;
+  width: 20px;
 }
 
 @media (max-width: 980px) {

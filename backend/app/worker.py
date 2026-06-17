@@ -23,16 +23,7 @@ from app.services.token_estimator import TokenEstimator
 logger = logging.getLogger("worker")
 
 
-ROLE_PREFIX_RE = re.compile(r"^\s*(assistant|ассистент)\s*:\s*", re.IGNORECASE)
-NEXT_TURN_RE = re.compile(r"\n\s*(user|пользователь|USER)\s*:\s*", re.IGNORECASE)
-DEFAULT_CONVERSATION_TITLE = "Новый диалог"
-THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
-THINK_OPEN_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
-THINK_CLOSE_RE = re.compile(r"</think>", re.IGNORECASE)
-REASONING_MARKERS_RE = re.compile(
-    r"^\s*(thinking process|analy[sz]e the request|drafting the response|review against constraints|final check)\s*:",
-    re.IGNORECASE,
-)
+from app.services.response_cleanup import THINK_CLOSE_RE, THINK_OPEN_RE, clean_assistant_answer
 
 
 def render_history(messages: list[Message]) -> str:
@@ -43,20 +34,7 @@ def render_history(messages: list[Message]) -> str:
     return "\n\n".join(rendered)
 
 
-def clean_assistant_answer(answer: str) -> str:
-    cleaned = THINK_BLOCK_RE.sub("", answer)
-    open_match = THINK_OPEN_RE.search(cleaned)
-    if open_match:
-        # If the model was cut off before </think>, discard everything after the opening tag.
-        cleaned = cleaned[: open_match.start()]
-    cleaned = THINK_CLOSE_RE.sub("", cleaned)
-    cleaned = ROLE_PREFIX_RE.sub("", cleaned.strip())
-    if REASONING_MARKERS_RE.search(cleaned):
-        return ""
-    next_turn_match = NEXT_TURN_RE.search(cleaned)
-    if next_turn_match:
-        cleaned = cleaned[: next_turn_match.start()].rstrip()
-    return cleaned
+DEFAULT_CONVERSATION_TITLE = "Новый диалог"
 
 
 def build_llama_image_data(attachments: list[dict]) -> tuple[list[dict], str]:
@@ -213,18 +191,22 @@ async def process_job(redis_client: Redis, job_id: uuid.UUID) -> None:
                 position, size = await queue.get_scope_queue_metrics(db, job.user_id, job.conversation_id, job)
                 await queue.publish_status(str(job.id), JobStatus.retrieving, position, size)
                 retrieval_started = time.perf_counter()
-                retrieved = rag.retrieve(request_message.content, top_k=5)
+                retrieved = await rag.retrieve_for_query(db, request_message.content, top_k=8)
                 retrieval_latency_ms = int((time.perf_counter() - retrieval_started) * 1000)
 
             system_prompt = build_system_prompt(use_retrieval=bool(retrieved), multimodal=settings.model_multimodal)
             context_window = await context_service.build_context_window(db, str(job.conversation_id), system_prompt=system_prompt)
             if retrieved:
                 rag_instruction = RETRIEVAL_AWARE_PROMPT.strip()
+            elif use_rag:
+                rag_instruction = (
+                    "Режим: в базе знаний не найдено подходящих фрагментов по этому запросу. "
+                    "Честно сообщи, что нужного документа или стандарта нет в базе знаний. "
+                    "Не ссылайся на источники и не выдумывай содержание стандартов."
+                )
             else:
                 rag_instruction = "Режим: обычный ответ без factual grounding из базы знаний."
-            rag_part = "\n\n".join(
-                f"[doc={chunk.document_id} chunk={chunk.chunk_id} score={chunk.score:.3f}] {chunk.text}" for chunk in retrieved
-            )
+            rag_part = "\n\n---\n\n".join(chunk.text for chunk in retrieved)
             history_messages = [message for message in context_window.selected_messages if message.id != request_message.id]
             messages_part = render_history(history_messages)
             llama_image_data, image_prompt_part = build_llama_image_data(request_message.attachments or [])
@@ -245,8 +227,7 @@ async def process_job(redis_client: Redis, job_id: uuid.UUID) -> None:
                 f"ATTACHED_IMAGES:\n{image_prompt_part}\n"
                 f"{image_instruction}\n"
                 f"Текущий вопрос пользователя:\n{request_message.content}\n\n"
-                "Ответь только финальным сообщением ассистента. Не добавляй имена ролей и не продолжай диалог за пользователя. "
-                "Не выводи <think>, Thinking Process, анализ запроса или черновики. /no_think\n"
+                "Ответ:\n"
             )
             position, size = await queue.get_scope_queue_metrics(db, job.user_id, job.conversation_id, job)
             await queue.publish_status(
@@ -317,10 +298,8 @@ async def process_job(redis_client: Redis, job_id: uuid.UUID) -> None:
                 empty_generation_retry_used = True
                 retry_started = time.perf_counter()
                 retry_prompt = (
-                    f"{prompt}\n\n"
-                    "Предыдущая генерация вернула пустой ответ. "
-                    "Сгенерируй минимум одно содержательное предложение по текущему вопросу. "
-                    "Не добавляй префиксы ролей. Не выводи <think> или Thinking Process. /no_think"
+                    f"{prompt}\n"
+                    "Ответ (дай хотя бы одно содержательное предложение по вопросу):\n"
                 )
                 retry_answer = await llama.generate(retry_prompt, image_data=llama_image_data)
                 retry_latency_ms = int((time.perf_counter() - retry_started) * 1000)

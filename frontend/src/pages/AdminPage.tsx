@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { prepareLogForDisplay } from "../formatLogPayload";
 
 type LogRow = {
   trace_id: string;
@@ -10,16 +11,26 @@ type LogRow = {
   created_at: string;
 };
 
+type PaginatedLogs = {
+  items: LogRow[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+};
+
+const LOGS_PAGE_SIZE = 10;
+
 export function AdminPage() {
   const [rows, setRows] = useState<LogRow[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState<{ id: string; login: string; role: string }[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api<LogRow[]>("/api/admin/logs")
-      .then(setRows)
-      .catch((err) => setError((err as Error).message));
     api<{ id: string; login: string; role: string }[]>("/api/admin/users")
       .then((data) => {
         setUsers(data);
@@ -28,9 +39,20 @@ export function AdminPage() {
       .catch((err) => setError((err as Error).message));
   }, []);
 
-  async function makeAdmin() {
+  useEffect(() => {
+    setLoading(true);
+    api<PaginatedLogs>(`/api/admin/logs?page=${page}&page_size=${LOGS_PAGE_SIZE}`)
+      .then((data) => {
+        setRows(data.items);
+        setTotalPages(data.total_pages);
+      })
+      .catch((err) => setError((err as Error).message))
+      .finally(() => setLoading(false));
+  }, [page]);
+
+  async function changeRole() {
     if (!selectedUserId) return;
-    await api("/api/admin/make-admin", {
+    await api("/api/admin/change-role", {
       method: "POST",
       body: JSON.stringify({ target_user_id: selectedUserId }),
     });
@@ -51,16 +73,35 @@ export function AdminPage() {
             </option>
           ))}
         </select>
-        <button onClick={makeAdmin}>Сделать админом</button>
+        <button onClick={changeRole}>ИЗМЕНИТЬ РОЛЬ</button>
       </section>
-      {rows.map((row) => (
-        <article key={row.trace_id + row.message_id} className="card">
-          <div>trace_id: {row.trace_id}</div>
-          <div>conversation_id: {row.conversation_id}</div>
-          <div>created_at: {new Date(row.created_at).toLocaleString()}</div>
-          <pre>{JSON.stringify(row.payload, null, 2)}</pre>
-        </article>
-      ))}
+      <div className="logs-panel">
+        {loading ? (
+          <p className="logs-status">Загрузка логов...</p>
+        ) : (
+          rows.map((row) => (
+            <article key={row.trace_id + row.message_id} className="log-card">
+              <pre>{JSON.stringify(prepareLogForDisplay(row), null, 2)}</pre>
+            </article>
+          ))
+        )}
+        <div className="logs-pagination">
+          <button type="button" disabled={loading || page <= 1} onClick={() => setPage((value) => value - 1)}>
+            Назад
+          </button>
+          <span>
+            Страница {page}
+            {totalPages > 0 ? ` из ${totalPages}` : ""}
+          </span>
+          <button
+            type="button"
+            disabled={loading || page >= totalPages || totalPages === 0}
+            onClick={() => setPage((value) => value + 1)}
+          >
+            Вперёд
+          </button>
+        </div>
+      </div>
     </main>
   );
 }

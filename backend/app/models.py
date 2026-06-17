@@ -2,10 +2,11 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.timezone_util import now_gmt5
 from app.types import GUID
 
 
@@ -108,6 +109,11 @@ class KnowledgeDocument(Base):
     source_uri: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     checksum: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    file_extension: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    file_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    visible_to_users: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -141,3 +147,12 @@ class ModelCapability(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     model_hf: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     multimodal: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class Feedback(Base):
+    __tablename__ = "feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), ForeignKey("users.id"), nullable=False)
+    content: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now_gmt5)

@@ -2,15 +2,15 @@ import json
 import uuid
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import get_db
 from app.deps import get_current_user
-from app.models import Conversation, GenerationJob, JobStatus, Message, MessageRole, ModelCapability, User
+from app.models import Conversation, GenerationJob, JobStatus, Message, MessageRole, ModelCapability, PipelineLog, User
 from app.schemas import ConversationCreate, ConversationOut, ConversationRename, EnqueueResponse, MessageCreate, MessageOut
 from app.services.queue_service import QueueFullError, QueueService
 from app.services.token_estimator import TokenEstimator
@@ -64,6 +64,23 @@ async def rename_conversation(
     await db.commit()
     await db.refresh(conv)
     return ConversationOut(id=conv.id, title=conv.title, created_at=conv.created_at, updated_at=conv.updated_at)
+
+
+@router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_conversation(
+    conversation_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    conv = await db.get(Conversation, conversation_id)
+    if not conv or conv.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    await db.execute(delete(GenerationJob).where(GenerationJob.conversation_id == conversation_id))
+    await db.execute(delete(PipelineLog).where(PipelineLog.conversation_id == conversation_id))
+    await db.execute(delete(Message).where(Message.conversation_id == conversation_id))
+    await db.delete(conv)
+    await db.commit()
 
 
 @router.get("/conversations/{conversation_id}/messages", response_model=list[MessageOut])

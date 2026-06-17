@@ -1,11 +1,13 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api, streamJob } from "../api";
 import { MarkdownMessage } from "../MarkdownMessage";
+import { TrashIcon } from "../components/TrashIcon";
+import { DeleteConversationModal } from "./DeleteConversationModal";
+import { FeedbackModal } from "./FeedbackModal";
 
 type Conversation = { id: string; title: string };
 type Attachment = { kind: string; content_type: string; value: string };
 type Message = { id: string; role: "user" | "assistant" | "system"; content: string; attachments?: Attachment[] };
-type RetrievalResult = { document_id: string; chunk_id: string; score: number };
 type Capabilities = { model_hf: string; multimodal: boolean; max_queue_size: number };
 
 const STATUSES = ["queued", "thinking", "retrieving", "responding", "done", "error"] as const;
@@ -16,8 +18,6 @@ export function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<(typeof STATUSES)[number] | "idle">("idle");
-  const [sources, setSources] = useState<RetrievalResult[]>([]);
-  const [modelMode, setModelMode] = useState<"rag" | "general">("general");
   const [thinkingNotice, setThinkingNotice] = useState<string>("");
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [attachmentName, setAttachmentName] = useState<string>("");
@@ -25,6 +25,8 @@ export function ChatPage() {
   const [error, setError] = useState<string>("");
   const [isRenaming, setIsRenaming] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeConversation = useMemo(
@@ -33,9 +35,21 @@ export function ChatPage() {
   );
 
   async function loadConversations() {
-    const data = await api<Conversation[]>("/api/chat/conversations");
+    let data = await api<Conversation[]>("/api/chat/conversations");
+    if (!data.length) {
+      const created = await api<Conversation>("/api/chat/conversations", {
+        method: "POST",
+        body: JSON.stringify({ title: "Новый диалог" }),
+      });
+      data = [created];
+    }
     setConversations(data);
-    if (!conversationId && data.length) setConversationId(data[0].id);
+    setConversationId((current) => {
+      if (current && data.some((item) => item.id === current)) {
+        return current;
+      }
+      return data[0]?.id ?? null;
+    });
   }
 
   async function loadCapabilities() {
@@ -85,6 +99,26 @@ export function ChatPage() {
     });
     setConversations((prev) => prev.map((item) => (item.id === renamed.id ? renamed : item)));
     setIsRenaming(false);
+  }
+
+  async function deleteConversation(target: Conversation) {
+    const wasActive = target.id === conversationId;
+    await api(`/api/chat/conversations/${target.id}`, { method: "DELETE" });
+    if (wasActive) {
+      setMessages([]);
+      setStatus("idle");
+      setThinkingNotice("");
+      setError("");
+    }
+    const remaining = conversations.filter((item) => item.id !== target.id);
+    if (!remaining.length) {
+      await loadConversations();
+      return;
+    }
+    setConversations(remaining);
+    if (wasActive) {
+      setConversationId(remaining[0].id);
+    }
   }
 
   async function send(event: FormEvent) {
@@ -153,12 +187,6 @@ export function ChatPage() {
           return copy;
         });
       }
-      if (eventPayload?.payload?.retrieval_results) {
-        setSources(eventPayload.payload.retrieval_results as RetrievalResult[]);
-      }
-      if (eventPayload?.payload?.mode) {
-        setModelMode(eventPayload.payload.mode as "rag" | "general");
-      }
       const streamError = eventPayload?.payload?.error as string | undefined;
       if (streamError) {
         setError(streamError);
@@ -212,10 +240,20 @@ export function ChatPage() {
         <button onClick={createConversation}>+ Новый диалог</button>
         <div className="conversation-list">
           {conversations.map((conv) => (
-            <button key={conv.id} onClick={() => setConversationId(conv.id)} className={conv.id === conversationId ? "active" : ""}>
+            <button
+              key={conv.id}
+              type="button"
+              onClick={() => setConversationId(conv.id)}
+              className={conv.id === conversationId ? "active" : ""}
+            >
               {conv.title}
             </button>
           ))}
+        </div>
+        <div className="sidebar-footer">
+          <button type="button" className="feedback-button" onClick={() => setFeedbackOpen(true)}>
+            Обратная связь
+          </button>
         </div>
       </aside>
       <section className="chat-panel">
@@ -231,7 +269,22 @@ export function ChatPage() {
           ) : (
             <>
               <h2>{activeConversation?.title || "Диалог"}</h2>
-              {activeConversation && <button onClick={startRename}>ПЕРЕИМЕНОВАТЬ</button>}
+              {activeConversation && (
+                <div className="conversation-heading-actions">
+                  <button type="button" onClick={startRename}>
+                    ПЕРЕИМЕНОВАТЬ
+                  </button>
+                  <button
+                    type="button"
+                    className="heading-delete-button"
+                    onClick={() => setDeleteTarget(activeConversation)}
+                    aria-label={`Удалить диалог «${activeConversation.title}»`}
+                    title="Удалить диалог"
+                  >
+                    <TrashIcon />
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -289,15 +342,14 @@ export function ChatPage() {
           <button type="submit">Отправить</button>
         </form>
       </section>
-      <aside className="sources">
-        <h3>Источники</h3>
-        <p>Режим ответа: {modelMode === "rag" ? "На основе базы знаний" : "Общий ответ модели"}</p>
-        {sources.length === 0 ? (
-          <p>Нет</p>
-        ) : (
-          sources.map((src) => <p key={`${src.document_id}-${src.chunk_id}`}>{src.document_id} / {src.chunk_id} / {src.score.toFixed(3)}</p>)
-        )}
-      </aside>
+      {feedbackOpen && <FeedbackModal onClose={() => setFeedbackOpen(false)} />}
+      {deleteTarget && (
+        <DeleteConversationModal
+          title={deleteTarget.title}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={() => deleteConversation(deleteTarget)}
+        />
+      )}
     </main>
   );
 }

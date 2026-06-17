@@ -12,7 +12,8 @@ services:
 
   api:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
       target: api
     env_file:
       - .env
@@ -26,7 +27,8 @@ services:
 
   worker:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
       target: worker
     env_file:
       - .env

@@ -1,8 +1,10 @@
 import json
+import mimetypes
 import os
 import pathlib
 import urllib.error
 import urllib.request
+import uuid
 
 
 API_BASE = os.getenv("API_BASE", "http://localhost:8000")
@@ -25,20 +27,44 @@ def post_json(path: str, payload: dict, token: str | None = None) -> dict:
         raise RuntimeError(f"{path} failed: {exc.code} {body}") from exc
 
 
+def post_file(path: str, file_path: pathlib.Path, token: str) -> dict:
+    boundary = f"----RagAppBoundary{uuid.uuid4().hex}"
+    file_bytes = file_path.read_bytes()
+    mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode("utf-8"),
+            (
+                f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'
+                f"Content-Type: {mime_type}\r\n\r\n"
+            ).encode("utf-8"),
+            file_bytes,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("utf-8"),
+        ]
+    )
+    headers = {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Authorization": f"Bearer {token}",
+    }
+    request = urllib.request.Request(f"{API_BASE}{path}", data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        raise RuntimeError(f"{path} failed: {exc.code} {body}") from exc
+
+
 def main() -> None:
     token_payload = post_json("/api/auth/login", {"login": ADMIN_LOGIN, "password": ADMIN_PASS})
     token = token_payload["access_token"]
 
-    for file_path in sorted(SEED_DIR.glob("*.md")):
-        content = file_path.read_text(encoding="utf-8")
-        payload = {
-            "title": file_path.stem.replace("_", " ").title(),
-            "content": content,
-            "source_uri": f"seed://{file_path.name}",
-            "metadata_json": {"domain": "project-management", "seed": True},
-        }
-        result = post_json("/api/knowledge/upload", payload, token=token)
-        print(f"indexed: {result['title']} ({result['id']})")
+    for file_path in sorted(SEED_DIR.glob("*")):
+        if file_path.suffix.lower() not in {".md", ".txt", ".docx", ".pdf"}:
+            continue
+        result = post_file("/api/knowledge/upload", file_path, token)
+        print(f"indexed: {result['file_name']} ({result['id']})")
 
 
 if __name__ == "__main__":

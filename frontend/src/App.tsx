@@ -6,6 +6,7 @@ import { KnowledgePage } from "./pages/KnowledgePage";
 import { LoginPage } from "./pages/LoginPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
 import { ProfilePage } from "./pages/ProfilePage";
+import { AdminFeedbackPage } from "./pages/AdminFeedbackPage";
 
 const isAuthed = () => Boolean(localStorage.getItem("token"));
 
@@ -80,6 +81,14 @@ export function App() {
           element={
             <Protected>
               <KnowledgePage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/profile/feedback"
+          element={
+            <Protected>
+              <AdminFeedbackPage />
             </Protected>
           }
         />

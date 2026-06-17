@@ -1,5 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api";
+import { prepareLogForDisplay } from "../formatLogPayload";
 
 type Role = "admin" | "user";
 
@@ -25,6 +27,16 @@ type LogRow = {
 
 type AdminUser = { id: string; login: string; role: string };
 
+type PaginatedLogs = {
+  items: LogRow[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+};
+
+const LOGS_PAGE_SIZE = 10;
+
 const emptyProfile: Profile = {
   user_id: "",
   login: "",
@@ -40,6 +52,10 @@ export function ProfilePage() {
   const [profile, setProfile] = useState<Profile>(emptyProfile);
   const [draft, setDraft] = useState<Profile>(emptyProfile);
   const [logs, setLogs] = useState<LogRow[]>([]);
+  const [logsPage, setLogsPage] = useState(1);
+  const [logsTotalPages, setLogsTotalPages] = useState(0);
+  const [logsTotal, setLogsTotal] = useState(0);
+  const [logsLoading, setLogsLoading] = useState(false);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
@@ -52,23 +68,41 @@ export function ProfilePage() {
     setProfile(data);
     setDraft(data);
     if (data.role === "admin") {
-      await loadAdminData();
+      await loadUsers();
     }
   }
 
-  async function loadAdminData() {
-    const [logRows, adminUsers] = await Promise.all([
-      api<LogRow[]>("/api/admin/logs"),
-      api<AdminUser[]>("/api/admin/users"),
-    ]);
-    setLogs(logRows);
+  async function loadUsers() {
+    const adminUsers = await api<AdminUser[]>("/api/admin/users");
     setUsers(adminUsers);
-    if (adminUsers.length > 0) setSelectedUserId(adminUsers[0].id);
+    if (adminUsers.length > 0) {
+      setSelectedUserId((current) => current || adminUsers[0].id);
+    }
+  }
+
+  async function loadLogs(page: number) {
+    setLogsLoading(true);
+    try {
+      const data = await api<PaginatedLogs>(
+        `/api/admin/logs?page=${page}&page_size=${LOGS_PAGE_SIZE}`
+      );
+      setLogs(data.items);
+      setLogsPage(data.page);
+      setLogsTotalPages(data.total_pages);
+      setLogsTotal(data.total);
+    } finally {
+      setLogsLoading(false);
+    }
   }
 
   useEffect(() => {
     loadProfile().catch((err) => setError((err as Error).message));
   }, []);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    void loadLogs(logsPage).catch((err) => setError((err as Error).message));
+  }, [isAdmin, logsPage]);
 
   async function saveProfile(event?: FormEvent) {
     event?.preventDefault();
@@ -136,13 +170,13 @@ export function ProfilePage() {
     link.click();
   }
 
-  async function makeAdmin() {
+  async function changeRole() {
     if (!selectedUserId) return;
-    await api("/api/admin/make-admin", {
+    await api("/api/admin/change-role", {
       method: "POST",
       body: JSON.stringify({ target_user_id: selectedUserId }),
     });
-    await loadAdminData();
+    await loadUsers();
   }
 
   return (
@@ -207,20 +241,49 @@ export function ProfilePage() {
                   </option>
                 ))}
               </select>
-              <button onClick={makeAdmin}>СДЕЛАТЬ АДМИНОМ</button>
+              <button onClick={changeRole}>ИЗМЕНИТЬ РОЛЬ</button>
             </div>
           </section>
 
           <section className="profile-card">
+            <h3>ОБРАТНАЯ СВЯЗЬ</h3>
+            <p className="profile-card-note">Просмотр отзывов пользователей о работе ассистента.</p>
+            <Link to="/profile/feedback" className="profile-link-button">
+              Открыть отзывы
+            </Link>
+          </section>
+
+          <section className="profile-card">
             <h3>ЛОГИ</h3>
-            {logs.map((row) => (
-              <article key={row.trace_id + row.message_id} className="log-card">
-                <div>trace_id: {row.trace_id}</div>
-                <div>conversation_id: {row.conversation_id}</div>
-                <div>created_at: {new Date(row.created_at).toLocaleString()}</div>
-                <pre>{JSON.stringify(row.payload, null, 2)}</pre>
-              </article>
-            ))}
+            <div className="logs-panel">
+              {logsLoading ? (
+                <p className="logs-status">Загрузка логов...</p>
+              ) : logs.length === 0 ? (
+                <p className="logs-status">Логов пока нет.</p>
+              ) : (
+                logs.map((row) => (
+                  <article key={row.trace_id + row.message_id} className="log-card">
+                    <pre>{JSON.stringify(prepareLogForDisplay(row), null, 2)}</pre>
+                  </article>
+                ))
+              )}
+              <div className="logs-pagination">
+                <button type="button" disabled={logsLoading || logsPage <= 1} onClick={() => setLogsPage((page) => page - 1)}>
+                  Назад
+                </button>
+                <span>
+                  Страница {logsPage}
+                  {logsTotalPages > 0 ? ` из ${logsTotalPages}` : ""} · всего {logsTotal}
+                </span>
+                <button
+                  type="button"
+                  disabled={logsLoading || logsPage >= logsTotalPages || logsTotalPages === 0}
+                  onClick={() => setLogsPage((page) => page + 1)}
+                >
+                  Вперёд
+                </button>
+              </div>
+            </div>
           </section>
         </>
       )}

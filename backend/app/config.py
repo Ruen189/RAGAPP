@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     embedding_model: str
     log_level: str = "INFO"
     jwt_secret: str
+    response_max_tokens: int = 3072
 
     @field_validator("raw_messages_size")
     @classmethod

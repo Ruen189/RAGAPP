@@ -66,7 +66,7 @@ class LlamaClient:
             payload = {
                 "messages": [{"role": "user", "content": content}],
                 "temperature": 0.2,
-                "max_tokens": 1024,
+                "max_tokens": self.settings.response_max_tokens,
                 "stream": stream,
             }
             if model:
@@ -76,7 +76,7 @@ class LlamaClient:
         payload = {
             "prompt": prompt,
             "temperature": 0.2,
-            "n_predict": 1024,
+            "n_predict": self.settings.response_max_tokens,
             "stream": stream,
         }
         if model:
