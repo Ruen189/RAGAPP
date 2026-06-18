@@ -23,7 +23,7 @@ from app.services.token_estimator import TokenEstimator
 logger = logging.getLogger("worker")
 
 
-from app.services.response_cleanup import THINK_CLOSE_RE, THINK_OPEN_RE, clean_assistant_answer
+from app.services.response_cleanup import THINK_CLOSE_RE, THINK_OPEN_RE, RepetitionGuard, clean_assistant_answer
 
 
 def render_history(messages: list[Message]) -> str:
@@ -243,6 +243,7 @@ async def process_job(redis_client: Redis, job_id: uuid.UUID) -> None:
             first_token_at: float | None = None
             streamed_token_estimate = 0
             think_filter = ThinkBlockFilter()
+            repetition_guard = RepetitionGuard()
 
             async def publish_model_loading(attempt: int, max_attempts: int, _: str) -> None:
                 await queue.publish_status(
@@ -263,8 +264,12 @@ async def process_job(redis_client: Redis, job_id: uuid.UUID) -> None:
                 image_data=llama_image_data,
                 on_retry=publish_model_loading,
             ):
+                if repetition_guard.stopped:
+                    break
                 if token:
                     visible_token = think_filter.feed(token)
+                    if visible_token:
+                        visible_token = repetition_guard.feed(visible_token)
                     if visible_token:
                         if first_token_at is None:
                             first_token_at = time.perf_counter()
@@ -277,14 +282,29 @@ async def process_job(redis_client: Redis, job_id: uuid.UUID) -> None:
                             size,
                             payload={"delta": visible_token},
                         )
+                    if repetition_guard.stopped:
+                        break
 
             tail = think_filter.flush()
+            if tail and not repetition_guard.stopped:
+                tail = repetition_guard.feed(tail)
             if tail:
                 if first_token_at is None:
                     first_token_at = time.perf_counter()
                 chunks.append(tail)
                 streamed_token_estimate += TokenEstimator.count(tail)
                 await queue.publish_status(str(job.id), JobStatus.responding, position, size, payload={"delta": tail})
+            repetition_tail = repetition_guard.flush()
+            if repetition_tail:
+                chunks.append(repetition_tail)
+                streamed_token_estimate += TokenEstimator.count(repetition_tail)
+                await queue.publish_status(
+                    str(job.id),
+                    JobStatus.responding,
+                    position,
+                    size,
+                    payload={"delta": repetition_tail},
+                )
 
             generation_finished = time.perf_counter()
             latency_ms = int((generation_finished - started) * 1000)

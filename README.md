@@ -1,7 +1,7 @@
 # Проектный менеджер (RAG + llama.cpp)
 
 Production-oriented web application: AI-ассистент для студентов по управлению проектами, методологиям и инженерным практикам.  
-Стек: React SPA + FastAPI API + SSE realtime + Redis queue + PostgreSQL state + Qdrant RAG + llama.cpp/llama-server.
+Стек: React SPA + FastAPI API + SSE realtime + Redis queue + PostgreSQL state + Qdrant RAG + llama.cpp/llama-server (TurboQuant KV-cache).
 
 ## 1) Архитектура по слоям
 
@@ -262,7 +262,12 @@ docker compose --profile llama-cpu-full up --build
 - `ADMIN_PASS`
 - `LLAMA_HOST`
 - `LLAMA_PORT`
+- `KV_CACHE_TYPE_K`
+- `KV_CACHE_TYPE_V`
+- `KV_CACHE_TYPE_K_CPU`
+- `KV_CACHE_TYPE_V_CPU`
 - `LLAMA_IMAGE`
+- `LLAMA_CUDA_IMAGE`
 - `MODEL_MULTIMODAL`
 - `MAX_QUEUE_SIZE`
 - `RAW_MESSAGES_SIZE`
@@ -296,18 +301,24 @@ docker compose --profile llama-cpu-full up --build
 llama-server \
   -hf unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL \
   -c 32768 \
+  --cache-type-k turbo4 \
+  --cache-type-v turbo3 \
   --host 0.0.0.0 \
   --port 8765
 ```
+
+В `docker-compose` GPU-контейнеры (`llama-cuda`, `llama-summary-cuda`) используют образ с TurboQuant и флаги из `KV_CACHE_TYPE_K` / `KV_CACHE_TYPE_V` (по умолчанию `turbo4` / `turbo3`).
 
 Варианты:
 
 - внешний локальный llama.cpp (`LLAMA_HOST` указывает на host);
 - контейнер `llama` в `docker-compose` (profile `llama`), если локально не установлен.
-- образ llama.cpp задается через `LLAMA_IMAGE`; по умолчанию используется CPU-образ `ghcr.io/ggml-org/llama.cpp:server`.
+- CPU-образ: `LLAMA_IMAGE` → `ghcr.io/ggml-org/llama.cpp:server` (KV: `q8_0` по умолчанию).
+- GPU + TurboQuant: `LLAMA_CUDA_IMAGE` → `vito974/llama-cpp-turboquant:server-cuda12` (см. §8.2).
 - `LLAMA_PLATFORM=linux/amd64` фиксирует архитектуру контейнера и помогает избежать случайного запуска через эмуляцию.
 - `LLAMA_N_GPU_LAYERS`, `LLAMA_THREADS`, `LLAMA_PARALLEL` управляют скоростью/параллельностью llama-server.
-- `LLAMA_EXTRA_ARGS` позволяет передать дополнительные параметры, например `--cache-type-k q8_0 --cache-type-v q8_0`.
+- `KV_CACHE_TYPE_K` / `KV_CACHE_TYPE_V` — тип KV-cache (TurboQuant `turbo4` на GPU по умолчанию, см. §8.2).
+- `LLAMA_EXTRA_ARGS` — дополнительные флаги llama-server (не дублируйте `--cache-type-*`, они уже заданы через env).
 - Flash Attention намеренно не включается: на разных сборках llama.cpp этот параметр ведет себя нестабильно и требует явного значения `on|off|auto`.
 
 Для NVIDIA GPU используйте отдельный compose profile:
@@ -395,6 +406,60 @@ MODEL_HF=unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_M docker compose --profile llama-cuda u
 ```
 
 Для внешнего (не compose) `llama-server` укажите `-hf ...` при ручном запуске и выставьте `LLAMA_HOST` / `LLAMA_PORT` (и при dedicated summary — `SUMMARY_LLAMA_HOST` / `SUMMARY_LLAMA_PORT`) в `.env`.
+
+### 8.2 TurboQuant KV-cache
+
+[TurboQuant](https://arxiv.org/abs/2504.19874) сжимает **KV-cache** во время инференса (не веса GGUF и не текст чата). Это позволяет держать более длинный контекст (`MODEL_CONTEXT_SIZE`) на том же GPU: ориентир **~3–4×** меньше памяти на KV при `turbo4`/`turbo3`.
+
+RAGAPP включает TurboQuant **на уровне llama-server** — Python-код (`api` / `worker`) менять не нужно.
+
+**Важно:** официальный образ `ghcr.io/ggml-org/llama.cpp:server-cuda` **не** поддерживает `turbo2`/`turbo3`/`turbo4` (только `f16`, `q8_0`, `q4_0`, …). Для TurboQuant по умолчанию используется форк:
+
+```env
+LLAMA_CUDA_IMAGE=vito974/llama-cpp-turboquant:server-cuda12
+```
+
+(сборка [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant), образ на Docker Hub).
+
+| Переменная | Назначение |
+|---|---|
+| `LLAMA_CUDA_IMAGE` | Docker-образ для `llama-cuda` / `llama-summary-cuda` |
+| `KV_CACHE_TYPE_K` | K-cache на GPU (по умолчанию `turbo4`) |
+| `KV_CACHE_TYPE_V` | V-cache на GPU (по умолчанию `turbo3`, асимметричный режим из документации форка) |
+| `KV_CACHE_TYPE_K_CPU` | K-cache на CPU-контейнерах (по умолчанию `q8_0`) |
+| `KV_CACHE_TYPE_V_CPU` | V-cache на CPU-контейнерах (по умолчанию `q8_0`) |
+
+Контейнеры `llama-cuda` / `llama-summary-cuda`:
+
+```text
+--cache-type-k ${KV_CACHE_TYPE_K} --cache-type-v ${KV_CACHE_TYPE_V}
+```
+
+Контейнеры `llama` / `llama-summary` (официальный CPU-образ):
+
+```text
+--cache-type-k ${KV_CACHE_TYPE_K_CPU} --cache-type-v ${KV_CACHE_TYPE_V_CPU}
+```
+
+Рекомендуемые значения GPU (`turbo*` требуют `LLAMA_CUDA_IMAGE` с TurboQuant):
+
+| `KV_CACHE_TYPE_K` | `KV_CACHE_TYPE_V` | Комментарий |
+|---|---|---|
+| `turbo4` | `turbo3` | Рекомендуемый default: качество K, сжатие V |
+| `turbo4` | `turbo4` | Максимальное качество TurboQuant |
+| `q8_0` | `q8_0` | Без TurboQuant (официальный образ `ghcr.io/.../server-cuda`) |
+| `f16` | `f16` | Без сжатия KV, максимум VRAM |
+
+После смены образа или типа KV-cache:
+
+```bash
+docker compose pull llama-cuda llama-summary-cuda
+docker compose --profile llama-gpu-full up -d llama-cuda llama-summary-cuda
+```
+
+Ошибка `Unsupported cache type: turbo4` означает, что запущен **официальный** llama.cpp без форка — обновите `LLAMA_CUDA_IMAGE` в `.env` и пересоздайте контейнеры (`docker compose up -d --force-recreate llama-cuda llama-summary-cuda`).
+
+Если качество ответов на длинных диалогах ухудшилось — откатите на `q8_0`/`f16` или поставьте официальный `ghcr.io/ggml-org/llama.cpp:server-cuda` без `--cache-type turbo*`.
 
 ## 9) Запуск
 

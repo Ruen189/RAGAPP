@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api, streamJob } from "../api";
 import { MarkdownMessage } from "../MarkdownMessage";
 import { TrashIcon } from "../components/TrashIcon";
@@ -27,6 +27,7 @@ export function ChatPage() {
   const [draftTitle, setDraftTitle] = useState("");
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeConversation = useMemo(
@@ -218,12 +219,12 @@ export function ChatPage() {
     }
   }
 
-  async function onAttachFile(file: File | null) {
-    if (!file) return;
+  async function attachImageFile(file: File) {
     if (!file.type.startsWith("image/")) {
       setError("Поддерживаются только изображения");
       return;
     }
+    setError("");
     const base64Value = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result));
@@ -232,6 +233,42 @@ export function ChatPage() {
     });
     setAttachmentName(file.name);
     setAttachmentPayload([{ kind: "image", content_type: file.type, value: base64Value }]);
+  }
+
+  async function onAttachFile(file: File | null) {
+    if (!file) return;
+    await attachImageFile(file);
+  }
+
+  function handleDragEnter(event: DragEvent<HTMLElement>) {
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    setIsDragOver(true);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLElement>) {
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLElement>) {
+    const related = event.relatedTarget as Node | null;
+    if (related && event.currentTarget.contains(related)) return;
+    setIsDragOver(false);
+  }
+
+  async function handleDrop(event: DragEvent<HTMLElement>) {
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    setIsDragOver(false);
+    const files = Array.from(event.dataTransfer.files);
+    const imageFile = files.find((file) => file.type.startsWith("image/"));
+    if (!imageFile) {
+      setError(files.length ? "Поддерживаются только изображения" : "");
+      return;
+    }
+    await attachImageFile(imageFile);
   }
 
   return (
@@ -256,7 +293,18 @@ export function ChatPage() {
           </button>
         </div>
       </aside>
-      <section className="chat-panel">
+      <section
+        className={`chat-panel${isDragOver ? " drag-over" : ""}`}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={(event) => void handleDrop(event)}
+      >
+        {isDragOver && (
+          <div className="chat-drop-overlay" aria-hidden="true">
+            <p>Перетащите изображение сюда</p>
+          </div>
+        )}
         <div className="conversation-heading">
           {isRenaming ? (
             <form onSubmit={renameConversation} className="rename-form">

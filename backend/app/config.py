@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     jwt_secret: str
     response_max_tokens: int = 3072
+    llm_repeat_penalty: float = 1.15
+    llm_repeat_last_n: int = 256
 
     @field_validator("raw_messages_size")
     @classmethod

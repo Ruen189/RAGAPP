@@ -67,6 +67,8 @@ class LlamaClient:
                 "messages": [{"role": "user", "content": content}],
                 "temperature": 0.2,
                 "max_tokens": self.settings.response_max_tokens,
+                "repeat_penalty": self.settings.llm_repeat_penalty,
+                "repeat_last_n": self.settings.llm_repeat_last_n,
                 "stream": stream,
             }
             if model:
@@ -77,6 +79,8 @@ class LlamaClient:
             "prompt": prompt,
             "temperature": 0.2,
             "n_predict": self.settings.response_max_tokens,
+            "repeat_penalty": self.settings.llm_repeat_penalty,
+            "repeat_last_n": self.settings.llm_repeat_last_n,
             "stream": stream,
         }
         if model:
